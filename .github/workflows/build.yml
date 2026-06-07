@@ -1,65 +1,28 @@
-name: N1 Esports Studio Ultimate
+name: N1 Build
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-22.04
+  build:
+    runs-on: ubuntu-22.04
 
-```
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-  - name: Install dependencies
-    run: |
-      sudo apt update
-      sudo apt install -y git curl wget unzip build-essential rsync \
-      libncurses5-dev zlib1g-dev gawk flex gettext libssl-dev iptables tc bc
+      - name: Install deps
+        run: sudo apt update && sudo apt install -y git curl wget
 
-  - name: Clone OpenWrt
-    run: |
-      git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-openwrt.git openwrt
+      - name: Clone repo
+        run: git clone https://github.com/ophub/amlogic-s9xxx-openwrt.git openwrt
 
-  - name: Write config
-    run: |
-      echo '#!/bin/bash' > openwrt/user_config.sh
-      echo 'DEVICE=s905x-n1' >> openwrt/user_config.sh
-      echo 'TARGET=immortalwrt-23.05' >> openwrt/user_config.sh
-      echo 'PROFILE=s905x' >> openwrt/user_config.sh
-      echo 'PACKAGES="luci luci-app-openclash luci-app-adguardhome dnsmasq-full ipset ip-full kmod-tun bash curl ca-certificates tc iptables"' >> openwrt/user_config.sh
-      chmod +x openwrt/user_config.sh
+      - name: Build
+        run: |
+          cd openwrt
+          bash build.sh
 
-  - name: Add AI scripts
-    run: |
-      mkdir -p openwrt/files/etc/studio_ai
-
-      echo '#!/bin/sh' > openwrt/files/etc/studio_ai/global_probe.sh
-      echo 'ping -c 2 8.8.8.8' >> openwrt/files/etc/studio_ai/global_probe.sh
-
-      chmod +x openwrt/files/etc/studio_ai/global_probe.sh
-
-  - name: First boot setup
-    run: |
-      mkdir -p openwrt/files/etc/uci-defaults
-
-      echo '#!/bin/sh' > openwrt/files/etc/uci-defaults/99-init
-      echo '/etc/init.d/openclash enable' >> openwrt/files/etc/uci-defaults/99-init
-      echo '/etc/init.d/openclash start' >> openwrt/files/etc/uci-defaults/99-init
-      echo '/etc/init.d/AdGuardHome enable 2>/dev/null' >> openwrt/files/etc/uci-defaults/99-init
-      echo '/etc/init.d/AdGuardHome start 2>/dev/null' >> openwrt/files/etc/uci-defaults/99-init
-
-      chmod +x openwrt/files/etc/uci-defaults/99-init
-
-  - name: Build firmware
-    run: |
-      cd openwrt
-      bash build.sh
-
-  - name: Upload firmware
-    uses: actions/upload-artifact@v4
-    with:
-      name: N1-Esports-Studio
-      path: openwrt/out/
-```
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: openwrt/out/
