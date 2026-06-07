@@ -1,183 +1,65 @@
 name: N1 Esports Studio Ultimate
 
 on:
-  workflow_dispatch:
-
-env:
-  DEVICE: s905x-n1
-  TARGET: immortalwrt-23.05
-  PROFILE: s905x
+workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+build:
+runs-on: ubuntu-22.04
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y git curl wget unzip build-essential rsync \
-          libncurses5-dev zlib1g-dev gawk flex gettext libssl-dev iptables tc bc
+  - name: Install dependencies
+    run: |
+      sudo apt update
+      sudo apt install -y git curl wget unzip build-essential rsync \
+      libncurses5-dev zlib1g-dev gawk flex gettext libssl-dev iptables tc bc
 
-      - name: Clone OpenWrt
-        run: |
-          git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-openwrt.git openwrt
+  - name: Clone OpenWrt
+    run: |
+      git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-openwrt.git openwrt
 
-      # =========================
-      # 核心配置
-      # =========================
-      - name: Inject Config
-        run: |
-          cat > openwrt/user_config.sh <<'EOF'
-#!/bin/bash
+  - name: Write config
+    run: |
+      echo '#!/bin/bash' > openwrt/user_config.sh
+      echo 'DEVICE=s905x-n1' >> openwrt/user_config.sh
+      echo 'TARGET=immortalwrt-23.05' >> openwrt/user_config.sh
+      echo 'PROFILE=s905x' >> openwrt/user_config.sh
+      echo 'PACKAGES="luci luci-app-openclash luci-app-adguardhome dnsmasq-full ipset ip-full kmod-tun bash curl ca-certificates tc iptables"' >> openwrt/user_config.sh
+      chmod +x openwrt/user_config.sh
 
-DEVICE=s905x-n1
-TARGET=immortalwrt-23.05
-PROFILE=s905x
+  - name: Add AI scripts
+    run: |
+      mkdir -p openwrt/files/etc/studio_ai
 
-PACKAGES="
-luci
-luci-base
-luci-app-openclash
-luci-app-adguardhome
-dnsmasq-full
-ipset
-ip-full
-kmod-tun
-bash
-curl
-ca-certificates
-tc
-iptables
-"
+      echo '#!/bin/sh' > openwrt/files/etc/studio_ai/global_probe.sh
+      echo 'ping -c 2 8.8.8.8' >> openwrt/files/etc/studio_ai/global_probe.sh
 
-DEFAULT_LAN_IP=192.168.1.2
-DISABLE_DHCP=1
-DISABLE_IPV6=1
-ROUTER_MODE=bridge
+      chmod +x openwrt/files/etc/studio_ai/global_probe.sh
 
-NETWORK_OFFLOAD=1
-FLOW_OFFLOAD=1
-TCP_FASTOPEN=1
+  - name: First boot setup
+    run: |
+      mkdir -p openwrt/files/etc/uci-defaults
 
-OPENCLASH_CORE=mihomo
-OPENCLASH_MODE=tun
-OPENCLASH_AUTO_START=1
+      echo '#!/bin/sh' > openwrt/files/etc/uci-defaults/99-init
+      echo '/etc/init.d/openclash enable' >> openwrt/files/etc/uci-defaults/99-init
+      echo '/etc/init.d/openclash start' >> openwrt/files/etc/uci-defaults/99-init
+      echo '/etc/init.d/AdGuardHome enable 2>/dev/null' >> openwrt/files/etc/uci-defaults/99-init
+      echo '/etc/init.d/AdGuardHome start 2>/dev/null' >> openwrt/files/etc/uci-defaults/99-init
 
-ADGUARD_ENABLE=1
-EOF
+      chmod +x openwrt/files/etc/uci-defaults/99-init
 
-      # =========================
-      # 电竞工作室云AI脚本
-      # =========================
-      - name: Add Studio AI Scripts
-        run: |
-          mkdir -p openwrt/files/etc/studio_ai
+  - name: Build firmware
+    run: |
+      cd openwrt
+      bash build.sh
 
-          # 全球节点测速
-          cat > openwrt/files/etc/studio_ai/global_probe.sh <<'EOF'
-#!/bin/sh
-NODES="1.1.1.1 8.8.8.8 223.5.5.5"
-BEST=""
-BEST_LAT=999
-
-for n in $NODES; do
-  LAT=$(ping -c 2 $n | awk -F'/' 'END{print $5}')
-  LOSS=$(ping -c 2 $n | grep -oP '\d+(?=% packet loss)')
-  if [ $LOSS -lt 5 ] && [ "$LAT" -lt "$BEST_LAT" ]; then
-    BEST=$n
-    BEST_LAT=$LAT
-  fi
-done
-
-echo $BEST > /tmp/best_node
-EOF
-
-          # 自动切换节点
-          cat > openwrt/files/etc/studio_ai/auto_switch.sh <<'EOF'
-#!/bin/sh
-BEST=$(cat /tmp/best_node)
-[ -z "$BEST" ] && exit 0
-
-uci set openclash.config.default_node="$BEST"
-uci commit openclash
-/etc/init.d/openclash restart
-EOF
-
-          # 双N1负载均衡（示意）
-          cat > openwrt/files/etc/studio_ai/load_balance.sh <<'EOF'
-#!/bin/sh
-# 检测主WAN状态，异常切换备用N1
-PING=$(ping -c 2 8.8.8.8 | grep '0% packet loss')
-if [ -z "$PING" ]; then
-  # WAN异常，切换备用线路
-  uci set network.wan.gateway='192.168.2.1'
-  uci commit network
-  /etc/init.d/network restart
-fi
-EOF
-
-          # QoS优化
-          cat > openwrt/files/etc/studio_ai/qos.sh <<'EOF'
-#!/bin/sh
-iptables -t mangle -A PREROUTING -p udp -j DSCP --set-dscp-class EF
-tc qdisc add dev eth0 root handle 1: htb default 20
-tc class add dev eth0 parent 1: classid 1:1 htb rate 1000mbit ceil 1000mbit prio 1
-EOF
-
-          # WiFi优化
-          cat > openwrt/files/etc/studio_ai/wifi_opt.sh <<'EOF'
-#!/bin/sh
-# 自动选择最佳信道
-iw dev wlan0 scan | grep signal > /tmp/wifi_scan
-BEST_CH=$(awk 'NR==1{print $1}' /tmp/wifi_scan)
-uci set wireless.radio0.channel=$BEST_CH
-uci commit wireless
-wifi reload
-EOF
-
-          chmod +x openwrt/files/etc/studio_ai/*
-
-      # =========================
-      # 首次启动自动化
-      # =========================
-      - name: First Boot Setup
-        run: |
-          mkdir -p openwrt/files/etc/uci-defaults
-          cat > openwrt/files/etc/uci-defaults/99-studio-ai <<'EOF'
-#!/bin/sh
-# 启动 OpenClash + AdGuard
-/etc/init.d/openclash enable
-/etc/init.d/openclash start
-/etc/init.d/AdGuardHome enable 2>/dev/null
-/etc/init.d/AdGuardHome start 2>/dev/null
-
-# 云AI初始化
-/etc/studio_ai/global_probe.sh
-/etc/studio_ai/auto_switch.sh
-/etc/studio_ai/qos.sh
-/etc/studio_ai/wifi_opt.sh
-
-exit 0
-EOF
-          chmod +x openwrt/files/etc/uci-defaults/99-studio-ai
-
-      # =========================
-      # 编译固件
-      # =========================
-      - name: Build firmware
-        run: |
-          cd openwrt
-          bash build.sh
-
-      # =========================
-      # 上传固件
-      # =========================
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: N1-Esports-Studio-Ultimate
-          path: openwrt/out/
+  - name: Upload firmware
+    uses: actions/upload-artifact@v4
+    with:
+      name: N1-Esports-Studio
+      path: openwrt/out/
+```
